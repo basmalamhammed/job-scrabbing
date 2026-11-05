@@ -1,180 +1,249 @@
-import csv
-import io
-import random
-import time
+"""
+💼 Job Tracker Hub — Main Entry Point
 
-import requests
+A unified Streamlit platform for tracking job applications
+and searching LinkedIn for new opportunities.
+"""
+
+import json
+
 import streamlit as st
-from bs4 import BeautifulSoup
 
+from sections.analytics import render_analytics
+from sections.cv_manager import render_cv_manager
+from sections.dashboard import render_dashboard
+from sections.job_search import render_job_search
+from sections.tracker import render_tracker
+from utils.storage import export_all_data, import_all_data
 
-st.set_page_config(page_title="LinkedIn Jobs Scraper", page_icon="💼", layout="centered")
+# ── Page config ────────────────────────────────────────────────
+st.set_page_config(
+    page_title="💼 Job Tracker Hub",
+    page_icon="💼",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-st.title("💼 LinkedIn Jobs Scraper")
-st.write("اكتب اسم الوظيفة اللي عايز تدور عليها، واختار المكان وعدد الصفحات، واضغط بحث.")
+# ── Custom CSS ─────────────────────────────────────────────────
+st.markdown(
+    """
+    <style>
+    /* ── Import font ─────────────────────────────────────── */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Noto+Sans+Arabic:wght@400;600;700;800&display=swap');
 
-# ============================================================
-#   نموذج الإدخال
-# ============================================================
-with st.form("search_form"):
-    keywords_input = st.text_input(
-        "اسم الوظيفة (أو أكتر من وظيفة مفصولة بفاصلة)",
-        placeholder="Data Analyst, Python Developer",
-    )
-    location = st.text_input("المكان", value="Egypt")
-    pages_per_keyword = st.slider(
-        "عدد الصفحات لكل وظيفة (كل صفحة ~25 وظيفة)",
-        min_value=1,
-        max_value=10,
-        value=4,
-    )
-    submitted = st.form_submit_button(" ندوس بحث يخويا ؟")
-
-# ============================================================
-#   دالة السكرابنج
-# ============================================================
-def scrape_linkedin_jobs(keywords, location, pages_per_keyword, progress_callback=None):
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
+    html, body, [class*="st-"] {
+        font-family: 'Noto Sans Arabic', 'Inter', sans-serif;
     }
 
-    all_jobs = []
-    seen_job_ids = set()
+    /* ── RTL direction for the whole app ─────────────────── */
+    .main .block-container,
+    section[data-testid="stSidebar"] .block-container,
+    section[data-testid="stSidebar"] > div {
+        direction: rtl;
+        text-align: right;
+    }
 
-    total_steps = len(keywords) * pages_per_keyword
-    step = 0
+    /* Keep specific elements LTR (English data, code, links) */
+    code, pre, .stCodeBlock,
+    input[type="text"], input[type="email"], input[type="password"],
+    textarea,
+    .stDataFrame, .stTable,
+    a[href] {
+        direction: ltr;
+        unicode-bidi: isolate;
+    }
 
-    for keyword in keywords:
-        for page in range(pages_per_keyword):
-            step += 1
-            if progress_callback:
-                progress_callback(
-                    step / total_steps,
-                    f"بيدور على '{keyword}' - صفحة {page + 1}/{pages_per_keyword}",
-                )
+    /* Tabs should flow RTL */
+    [data-testid="stTabs"] [role="tablist"] {
+        direction: rtl;
+    }
 
-            start = page * 25
-            url = (
-                "https://www.linkedin.com/jobs-guest/jobs/api/"
-                f"seeMoreJobPostings/search?keywords={keyword}"
-                f"&location={location}&start={start}"
-            )
+    /* Fix text inputs to still be LTR internally but RTL label */
+    [data-testid="stTextInput"] label,
+    [data-testid="stSelectbox"] label,
+    [data-testid="stMultiSelect"] label,
+    [data-testid="stDateInput"] label,
+    [data-testid="stSlider"] label,
+    [data-testid="stFileUploader"] label,
+    [data-testid="stCheckbox"] label,
+    [data-testid="stRadio"] label,
+    .stForm label {
+        direction: rtl;
+        text-align: right;
+    }
 
+    /* Metric values should stay LTR (numbers) */
+    [data-testid="stMetricValue"] {
+        direction: ltr;
+        unicode-bidi: isolate;
+    }
+
+    /* Expander headers RTL */
+    .streamlit-expanderHeader {
+        direction: rtl;
+        text-align: right;
+    }
+
+    /* Toast and alerts RTL */
+    [data-testid="stToast"],
+    .stAlert {
+        direction: rtl;
+        text-align: right;
+    }
+    
+    /* Fix for Streamlit icons rendering as text */
+    .material-symbols-rounded,
+    [data-testid="stIconMaterial"],
+    i,
+    svg,
+    .stIcon {
+        font-family: 'Material Symbols Rounded' !important;
+    }
+
+    /* ── Header styling ──────────────────────────────────── */
+    .main-title {
+        font-size: 2.2rem;
+        font-weight: 800;
+        margin-bottom: 0.2rem;
+        direction: rtl;
+    }
+    .main-subtitle {
+        color: #999;
+        font-size: 0.95rem;
+        margin-bottom: 1.5rem;
+        direction: rtl;
+    }
+
+    /* ── Expander styling ────────────────────────────────── */
+    .streamlit-expanderHeader {
+        font-weight: 600;
+        font-size: 0.95rem;
+    }
+
+    /* ── Form buttons ────────────────────────────────────── */
+    .stFormSubmitButton > button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 10px;
+        font-weight: 700;
+        padding: 0.6rem 2rem;
+        transition: opacity 0.2s ease;
+    }
+    .stFormSubmitButton > button:hover {
+        opacity: 0.85;
+    }
+
+    /* ── Download buttons ────────────────────────────────── */
+    .stDownloadButton > button {
+        border-radius: 10px;
+        font-weight: 600;
+    }
+
+    /* ── Sidebar ─────────────────────────────────────────── */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #667eea08 0%, #764ba208 100%);
+    }
+
+    /* ── Hide Streamlit branding ─────────────────────────── */
+    #MainMenu {display: none;}
+    footer {display: none;}
+    header {display: none;}
+
+    /* ── Remove top padding gap ──────────────────────────── */
+    .main .block-container {
+        padding-top: 1rem;
+    }
+
+    /* ── Smooth scrolling ────────────────────────────────── */
+    html {
+        scroll-behavior: smooth;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ── Header ─────────────────────────────────────────────────────
+st.markdown('<div class="main-title">💼 Job Tracker Hub</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="main-subtitle">منصة متابعة التقديمات والبحث عن وظائف</div>',
+    unsafe_allow_html=True,
+)
+
+# ── Sidebar: Data management ──────────────────────────────────
+with st.sidebar:
+    st.markdown("### ⚙️ إدارة البيانات")
+    st.caption(
+        "بيانات التقديمات والـ CV محفوظة كـ JSON. "
+        "لو بتشغّل على Streamlit Cloud، اعمل Export بانتظام."
+    )
+
+    st.markdown("---")
+
+    # Export
+    st.markdown("#### 📥 تصدير البيانات")
+    data_export = export_all_data()
+    export_json = json.dumps(data_export, ensure_ascii=False, indent=2)
+    st.download_button(
+        "⬇️ تحميل نسخة احتياطية (JSON)",
+        data=export_json.encode("utf-8"),
+        file_name="job_tracker_backup.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+    st.markdown("---")
+
+    # Import
+    st.markdown("#### 📤 استيراد بيانات")
+    uploaded = st.file_uploader(
+        "ارفع ملف النسخة الاحتياطية",
+        type=["json"],
+        key="import_file",
+    )
+    if uploaded:
+        if st.button("📤 استيراد", use_container_width=True):
             try:
-                response = requests.get(url, headers=headers, timeout=10)
-                if response.status_code != 200:
-                    break
+                imported = json.load(uploaded)
+                import_all_data(imported)
+                st.toast("✅ تم استيراد البيانات بنجاح!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"خطأ في الاستيراد: {e}")
 
-                soup = BeautifulSoup(response.content, "html.parser")
-                job_cards = soup.find_all("li")
-                if not job_cards:
-                    break
+    st.markdown("---")
+    st.markdown(
+        """
+        <div style="text-align: center; color: #999; font-size: 0.75rem; margin-top: 2rem;">
+            Built with ❤️ using Streamlit   
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-                for card in job_cards:
-                    link_elem = card.find("a", class_="base-card__full-link")
-                    if not link_elem:
-                        continue
+# ── Main tabs ──────────────────────────────────────────────────
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    [
+        "📊 Dashboard",
+        "🔍 بحث عن وظائف",
+        "📝 متابعة التقديمات",
+        "📄 إدارة الـ CV",
+        "📈 التحليلات",
+    ]
+)
 
-                    job_link = link_elem["href"].split("?")[0]
-                    job_id = (
-                        job_link.split("-")[-1]
-                        if "-" in job_link
-                        else job_link.split("/")[-1]
-                    )
+with tab1:
+    render_dashboard()
 
-                    if job_id in seen_job_ids:
-                        continue
-                    seen_job_ids.add(job_id)
+with tab2:
+    render_job_search()
 
-                    title_elem = card.find("h3", class_="base-search-card__title")
-                    title = title_elem.text.strip() if title_elem else "N/A"
+with tab3:
+    render_tracker()
 
-                    company_elem = card.find("h4", class_="base-search-card__subtitle")
-                    company = company_elem.text.strip() if company_elem else "N/A"
+with tab4:
+    render_cv_manager()
 
-                    location_elem = card.find("span", class_="job-search-card__location")
-                    loc = location_elem.text.strip() if location_elem else "N/A"
-
-                    date_elem = card.find("time")
-                    post_date = (
-                        date_elem["datetime"]
-                        if date_elem and date_elem.has_attr("datetime")
-                        else (date_elem.text.strip() if date_elem else "N/A")
-                    )
-
-                    all_jobs.append(
-                        {
-                            "Job ID": job_id,
-                            "Category Keyword": keyword,
-                            "Job Title": title,
-                            "Company": company,
-                            "Location": loc,
-                            "Post Date": post_date,
-                            "Job Link": job_link,
-                        }
-                    )
-
-                time.sleep(random.uniform(1.0, 2.0))
-
-            except Exception:
-                break
-
-    return all_jobs
-
-
-# ============================================================
-#   تنفيذ البحث
-# ============================================================
-if submitted:
-    keywords = [k.strip() for k in keywords_input.split(",") if k.strip()]
-
-    if not keywords:
-        st.error("اكتب اسم وظيفة واحدة على الأقل.")
-    else:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        def update_progress(fraction, message):
-            progress_bar.progress(fraction)
-            status_text.text(message)
-
-        with st.spinner("جاري البحث..."):
-            jobs = scrape_linkedin_jobs(keywords, location, pages_per_keyword, update_progress)
-
-        progress_bar.empty()
-        status_text.empty()
-
-        if not jobs:
-            st.warning("مفيش نتائج. جرب كلمة بحث تانية أو قلل عدد الصفحات.")
-        else:
-            st.success(f"تم العثور على {len(jobs)} وظيفة")
-
-            st.dataframe(jobs, use_container_width=True)
-
-            # تجهيز ملف CSV للتحميل
-            fieldnames = [
-                "Job ID",
-                "Category Keyword",
-                "Job Title",
-                "Company",
-                "Location",
-                "Post Date",
-                "Job Link",
-            ]
-            csv_buffer = io.StringIO()
-            writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(jobs)
-
-            safe_keyword = keywords[0].lower().replace(" ", "_")
-            st.download_button(
-                label="⬇ تحميل النتائج CSV",
-                data=csv_buffer.getvalue().encode("utf-8-sig"),
-                file_name=f"linkedin_jobs_{safe_keyword}_dataset.csv",
-                mime="text/csv",
-            )
+with tab5:
+    render_analytics()
